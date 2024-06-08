@@ -49,7 +49,9 @@ function main(json) {
     var event = json.event;
     var eventTimestamp = json.event.ts || json.event.event_ts;
     var userId = event.user;
+    var userName = getUserName(userId);
     var channelId = event.channel || (event.item && event.item.channel);
+    var channelName = getChannelName(channelId);
     var messageTs = event.ts || (event.item && event.item.ts);
 
     // 同じタイミングで同リクエストがくる場合への考慮
@@ -62,7 +64,7 @@ function main(json) {
     }
 
     // 検知変数のシートから検知条件を取得
-    var detectData = detectSheet.getRange(2, 1, detectSheet.getLastRow() - 1, 2).getValues();
+    var detectData = detectSheet.getRange(2, 1, detectSheet.getLastRow() - 1, 3).getValues();
     var wordsToDetect = [];
     var mentionsToDetect = [];
     var reactionsToDetect = [];
@@ -70,13 +72,26 @@ function main(json) {
     detectData.forEach(function(row) {
       var detectionType = row[0];
       var detectionContent = row[1];
+      var detectionRemarks = row[2];
 
       if (detectionType === "ワード") {
-        wordsToDetect.push(detectionContent);
+        // wordsToDetect.push(detectionContent);
+        wordsToDetect.push({
+          content: detectionContent,
+          remarks: detectionRemarks
+        });
       } else if (detectionType === "メンション") {
-        mentionsToDetect.push(detectionContent);
+        // mentionsToDetect.push(detectionContent);
+        mentionsToDetect.push({
+          content: detectionContent,
+          remarks: detectionRemarks
+        });
       } else if (detectionType === "リアクション") {
-        reactionsToDetect.push(detectionContent);
+        // reactionsToDetect.push(detectionContent);
+        reactionsToDetect.push({
+          content: detectionContent,
+          remarks: detectionRemarks
+        });
       }
     });
 
@@ -89,7 +104,8 @@ function main(json) {
 
     // ワードの検知
     if (event.type === 'message') {
-      wordsToDetect.forEach(function(word) {
+      wordsToDetect.forEach(function(wordObj) {
+        var word = wordObj.content;
         if (message.includes(word)) {
           conditionMet = true;
           triggerType = "ワード検知";
@@ -99,11 +115,14 @@ function main(json) {
       });
 
       // メンションの検知
-      mentionsToDetect.forEach(function(mention) {
+      mentionsToDetect.forEach(function(mentionObj) {
+        var mention = mentionObj.content;
+        var remarks = mentionObj.remarks;
         if (message.includes(mention)) {
           conditionMet = true;
           triggerType = "メンション";
-          triggerContent = `<@${mention}>`;
+          triggerContent = remarks; // シートに通知先をいれておく
+              message = message.replace(new RegExp(`@${mention}`, 'g'), `${remarks}`);
           slackUrl = `https://${workspaceName}.slack.com/archives/${channelId}/p${messageTs}`;
         }
       });
@@ -113,12 +132,13 @@ function main(json) {
     if (event.type === 'reaction_added') {
       var reaction = event.reaction;
       var messageResponse = getReactionedMessage(channelId, messageTs);
-      reactionsToDetect.forEach(function(reactionToDetect) {
+      reactionsToDetect.forEach(function(reactionToDetectObj) {
+        var reactionToDetect = reactionToDetectObj.content;
         if (reaction.includes(reactionToDetect)) {
           conditionMet = true;
           triggerType = "リアクション";
           triggerContent = reaction;
-          message = messageResponse || `Reaction :${reaction}: added`;
+          message = messageResponse;
           slackUrl = `https://${workspaceName}.slack.com/archives/${channelId}/p${messageTs}`;
         }
       });
@@ -126,8 +146,6 @@ function main(json) {
 
     // 検知条件を満たした場合にスプレッドシートに書き込み
     if (conditionMet) {
-      var userName = getUserName(userId);
-      var channelName = getChannelName(channelId);
       var rowData = [
         triggerType,
         triggerContent,
