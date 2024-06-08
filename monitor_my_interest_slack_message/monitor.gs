@@ -1,5 +1,5 @@
 function doPost(e) {
-  var json = JSON.parse(e.postData.contents);
+  var json = JSON.parse(e.postData.contents); 
   var response = main(json)
   return ContentService.createTextOutput(JSON.stringify(response)).setMimeType(ContentService.MimeType.JSON);
 }
@@ -21,7 +21,7 @@ function main(json) {
 
     // DEBUGシートの作成または取得
     var debugSheet = getDebugSheet();
-
+    
     // DEBUGシートにeの内容を追記
     logToDebugSheet(debugSheet, json);
 
@@ -37,12 +37,12 @@ function main(json) {
     var detectSheet = SpreadsheetApp.openById(spreadsheetId).getSheetByName(detectSheetName);
 
     // ヘッダー行の設定
-    var headers = ["検知タイプ", "検知内容", "投稿ユーザID", "投稿ユーザ名", "投稿チャンネルID", "投稿チャンネル名", "投稿メッセージ", "slackURL", "チェックボックス", "messageTs"];
+    var headers = ["#","検知時刻", "検知タイプ", "検知内容", "投稿ユーザID", "投稿ユーザ名", "投稿チャンネルID", "投稿チャンネル名", "投稿メッセージ", "slackURL", "messageTs"];
 
     if (sheet.getLastRow() === 0) {
       sheet.appendRow(headers);
       sheet.getRange(1, 1, 1, headers.length).setBackground('#D3D3D3'); // ヘッダー行の背景色を設定
-      sheet.getRange(1, 1, 1, 2).setBackground('#FFA500'); // 検知タイプと検知内容の背景色をオレンジ色に設定
+      sheet.getRange(1, 1, 1, 4).setBackground('#FFA500'); // 検知タイプと検知内容の背景色をオレンジ色に設定
     }
 
     // イベント情報の取得
@@ -56,10 +56,10 @@ function main(json) {
 
     // 同じタイミングで同リクエストがくる場合への考慮
     // 同じメッセージが蓄積されてこないように防御
-    if (isDuplicate(sheet, userId, channelId, messageTs)) {
+    if (isCached(userId, channelId, messageTs)) {
       return response = {
         "statusCode": 200,
-        "message": "Duplicate message detected"
+        "message": "same request is here"
       };
     }
 
@@ -73,7 +73,7 @@ function main(json) {
       var detectionType = row[0];
       var detectionContent = row[1];
       var detectionRemarks = row[2];
-
+      
       if (detectionType === "ワード") {
         // wordsToDetect.push(detectionContent);
         wordsToDetect.push({
@@ -122,7 +122,7 @@ function main(json) {
           conditionMet = true;
           triggerType = "メンション";
           triggerContent = remarks; // シートに通知先をいれておく
-              message = message.replace(new RegExp(`@${mention}`, 'g'), `${remarks}`);
+          message = message.replace(new RegExp(`@${mention}`, 'g'), `${remarks}`);
           slackUrl = `https://${workspaceName}.slack.com/archives/${channelId}/p${messageTs}`;
         }
       });
@@ -144,9 +144,20 @@ function main(json) {
       });
     }
 
+    if (isMessageDuplicated(sheet, userId, channelId, message)) {
+      return response = {
+        "statusCode": 200,
+        "message": "Duplicate message detected"
+      };
+    }
+
     // 検知条件を満たした場合にスプレッドシートに書き込み
     if (conditionMet) {
+      var serialNumber = sheet.getLastRow(); // 連番を設定
+      var currentTime = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }); // タイムスタンプを設定
       var rowData = [
+        serialNumber,
+        currentTime,
         triggerType,
         triggerContent,
         userId,
@@ -155,7 +166,6 @@ function main(json) {
         channelName,
         message,
         slackUrl,
-        '',
         eventTimestamp
       ];
       sheet.appendRow(rowData);
@@ -166,7 +176,7 @@ function main(json) {
       "message": "Received message successfully",
       "receivedData": json
     };
-
+    
   } catch (error) {
     return response = {
       "statusCode": 500,
@@ -262,19 +272,19 @@ function getDebugSheet() {
 // DEBUGシートにログを追記
 function logToDebugSheet(sheet, json) {
   var timestamp = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
-
+  
   // シートの最初の行がヘッダーかどうかをチェック
   if (sheet.getLastRow() === 0) {
     // ヘッダー行を設定
     var headers = ["Timestamp", "Event Type", "Text", "Reaction", "json"];
     sheet.appendRow(headers);
   }
-
+  
   // イベントデータを取得
   var eventType = json.event.type || "";
   var eventText = json.event.text || "";
   var eventReaction = json.event.reaction || "";
-
+  
   // データ行を追加
   sheet.appendRow([timestamp, eventType, eventText, eventReaction, json]);
 }
@@ -282,7 +292,7 @@ function logToDebugSheet(sheet, json) {
 // キャッシュの重複チェック
 // 同タイミングのリクエストはシートのキャッシュによって防ぐ
 // メッセージの重複チェックを行う
-function isDuplicate(sheet, userId, channelId, messageTs) {
+function isCached(userId, channelId, messageTs) {
     var cache = CacheService.getScriptCache();
     var cacheKey = `${userId}-${channelId}-${messageTs}`;
     var cached = cache.get(cacheKey);
@@ -295,9 +305,14 @@ function isDuplicate(sheet, userId, channelId, messageTs) {
     // チェックなのにストアするのは禁じ手だけどまあよい
     cache.put(cacheKey, 'processed', 5);
 
+    return false;
+}
+
+
+function isMessageDuplicated(sheet, userId, channelId, message) {
     var data = sheet.getDataRange().getValues();
     var isDuplicate = data.some(function(row) {
-      return row[2] === userId && row[4] === channelId && row[9] === messageTs; // userId、channelId、messageTsが一致するか確認
+      return row[4] === userId && row[6] === channelId && row[8] === message;
     });
 
     if (isDuplicate) {
@@ -305,16 +320,5 @@ function isDuplicate(sheet, userId, channelId, messageTs) {
       return true;
     }
 
-    return false;
-}
-
-
-function isCached(cacheKey) {
-    var cache = CacheService.getScriptCache();
-    var cached = cache.get(cacheKey);
-    if (cached) {
-      console.log("キャシュがすでに存在していました。");
-      return true;
-    }
     return false;
 }
